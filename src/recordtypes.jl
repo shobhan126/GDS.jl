@@ -2,13 +2,11 @@ using Dates
 
 abstract type GDSRecord end
 
-
-struct GDSRecordHeader <:GDSRecord
+struct GDSHeader
     length::UInt16
     record_type<:GDSRecord
     data_type::Union{UInt16, Int16, Int32, Float64, String}
 end
-
 
 struct GDSBeginLib <:GDSRecord
     last_modified::DateTime
@@ -19,8 +17,19 @@ struct GDSLibName <:GDSRecord
     name::String
 end
 
-struct GDSUnits <:GDSEndLib
-
+struct GDSUnits <:GDSRecord
+    scale_to_user_units::Float64
+    database_units_in_meters::Float64
 end
 
-struct GDS
+
+struct GDSEndLib <: GDSRecord
+end
+
+struct GDSBeginString <:GDSRecord
+end
+
+struct GDSBoundary
+end
+
+struct 
