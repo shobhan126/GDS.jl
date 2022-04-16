@@ -33,10 +33,11 @@ UINT_TO_TYPE = Dict(
 )
 
 # stream.read(4) == read 4 bytes
-"""
-Generator for complete records from a GDSII stream file.
-"""
 
+
+"""
+Read the IOStream assuming next few bits are the Record Header. 
+"""
 function read_header(stream::IOStream)
     num_bytes = ntoh(read(stream, UInt16))
     record_type = ntoh(read(stream, UInt8))
@@ -45,6 +46,9 @@ function read_header(stream::IOStream)
 end
 
 
+"""
+Read a Single Record from the stream.
+"""
 function read_record(stream::IOStream)
     num_bytes, record_type, data_type = read_header(stream)
     if num_bytes > 4
@@ -68,16 +72,15 @@ function read_record(stream::IOStream)
 end
 
 
-
 """
 Read a GDS file into raw records. 
 Emulates gdspy behavior.
 """
-function read_raw_record(stream::IOBuffer)
+function read_raw_record(stream::IOStream)
     # read record header
-
+    num_bytes, record_type, data_type = read_header(stream)
     if num_bytes > 4
-        return (record_type, [read(stream, UInt8) for _ in 1:num_bytes])
+        return (record_type, [read(stream, UInt8) for _ in 1:num_bytes-4])
     else
         return (record_type, Nothing)
     end
@@ -106,4 +109,3 @@ For every hex digit shifted, the exponent is decreased by one. Since the mantiss
  it is possible for the left three bits of a normalized mantissa to be zero.
 A zero value, also called true zero, is represented by a number with all bits zero
 """
-
