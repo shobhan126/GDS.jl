@@ -1,4 +1,3 @@
-# cell should be a type and not a Struct??
 
 mutable struct Cell
     name:: String

@@ -2,19 +2,66 @@ using Dates
 import Base: read, UInt16, UInt64, show
 
 primitive type  GDSFloat64 <: AbstractFloat 64 end 
+
 GDSFloat64(x::UInt64) = reinterpret(GDSFloat64, x)
 UInt64(x::GDSFloat64) = reinterpret(UInt64, x)
 
 
 abstract type GDSRecord end
 abstract type GDSEmptyRecord <:GDSRecord end
+abstract type GDS16Bit <:GDSRecord end
+abstract type GDS32Bit <:GDSRecord end
+abstract type GDS64Bit <:GDSRecord end
+abstract type GDSAsciiString <:GDSRecord end
+
+"""
+Record Header describing the data bytes.
+"""
+struct GDSRecordHeader{T} <: GDSRecord where T<: GDSRecord
+    num_bytes:: UInt16
+end
+
 
 macro emptyrecordtype(args)
-    """Internal macro to instantiate EmptyRecord Types"""
     for arg in args.args
         @eval abstract type $(arg) <: GDSEmptyRecord end
     end
 end
+
+
+macro sixteenbittype(args)
+    for arg in args.args
+        @eval primitive type $(arg) <: GDS16Bit 16 end
+        @eval $(arg)(x::UInt16) = reinterpret($(arg), x)
+        @eval $(arg)(x::Integer) = reinterpret($(arg), UInt16(x))
+    end
+end
+
+macro thirtytwobittype(args)
+    for arg in args.args
+        @eval primitive type $(arg) <: GDS32Bit 32 end
+        @eval $(arg)(x::UInt32) = reinterpret($(arg), x)
+        @eval $(arg)(x::Integer) = reinterpret($(arg), UInt32(x))
+    end
+end
+
+macro eightbyterealtype(args)
+    for arg in args.args
+        @eval primitive type $(arg) <: GDS64Bit 64 end
+        @eval $(arg)(x::UInt64) = reinterpret($(arg), x)
+        @eval $(arg)(x::Integer) = reinterpret($(arg), UInt64(x))
+        @eval $(arg)(x::GDSFloat64) = reinterpret($(arg), x)
+        @eval $(arg)(x::GDSFloat64) = reinterpret($(arg), GDSFloat64(x))
+    end
+end
+
+
+macro stringtype(args)
+    for arg in args.args
+        @eval struct $(arg) <: GDSAsciiString value::String end
+    end
+end
+
 
 @emptyrecordtype (
     GDSEndLibrary, 
@@ -31,20 +78,8 @@ end
     GDSEndMasks,
 )
 
-macro sixteenbittype(args)
-    """Internal macro to instantiate 16-bit Types"""
-    for arg in args.args
-        @eval primitive type $(arg) <: GDSRecord 16 end
-        @eval $(arg)(x::UInt16) = reinterpret($(arg), x)
-        @eval $(arg)(x::Integer) = reinterpret($(arg), UInt16(x))
-    end
-end
-
-
 @sixteenbittype (
     GDSHeader,
-    GDSBeginLibrary,
-    GDSBeginStructure,
     GDSLayer,
     GDSDataType,
     GDSTextType,
@@ -66,25 +101,6 @@ end
     GDSLibSecure,
 )
 
-macro thirtytwobittype(args)
-    """Internal macro to instantiate 32-bit (4-Byte) Types"""
-    for arg in args.args
-        @eval primitive type $(arg) <: GDSRecord 16 end
-        @eval $(arg)(x::UInt32) = reinterpret($(arg), x)
-        @eval $(arg)(x::Integer) = reinterpret($(arg), UInt32(x))
-    end
-end
-
-
-macro eightbyterealtype(args)
-    for arg in args.args
-        @eval primitive type $(arg) <: GDSRecord 64 end
-        @eval $(arg)(x::UInt64) = reinterpret($(arg), x)
-        @eval $(arg)(x::Integer) = reinterpret($(arg), UInt64(x))
-        @eval $(arg)(x::GDSFloat64) = reinterpret($(arg), x)
-        @eval $(arg)(x::GDSFloat64) = reinterpret($(arg), GDSFloat64(x))
-    end
-end
 
 @eightbyterealtype (
     GDSMag,
@@ -97,14 +113,6 @@ end
     # last_modified::DateTime
     # last_accessed::DateTime
 
-macro stringtype(args)
-    """Internal macro to instantiate 32-bit (4-Byte) Types"""
-    for arg in args.args
-        @eval struct $(arg) <: GDSRecord value::String end
-    end
-end
-
-
 @stringtype (
     GDSLibraryName, 
     GDSStructureName,
@@ -116,7 +124,15 @@ end
     GDSMask, 
     GDSSRFName
 )
+
 # add assertions for ascii string?
+struct GDSBeginLibrary <:GDSRecord
+    value::NTuple{12, Int16}
+end
+
+struct GDSBeginStructure <:GDSRecord
+    value::NTuple{12, Int16}
+end
 
 # composite type with gds floats?
 struct GDSUnits <:GDSRecord
@@ -127,7 +143,7 @@ end
 primitive type GDSWidth <: GDSRecord 32 end
 
 struct GDSXY <:GDSRecord
-    value::Vector{GDSFloat64}
+    value::Vector{Int32}
 end
 
 
@@ -174,7 +190,7 @@ UINT_TO_RECORD_TYPE = Dict(
     0x1602 => GDSTextType,
     0x1701 => GDSPresentation, 
     0x1906 => GDSString,
-    # 0x1A01 => StructureTransform,
+    0x1A01 => GDSStructureTransform,
     0x1B05 => GDSMag,
     0x1C05 => GDSAngle,
     0x1F06 => GDSReferenceLibraries,
@@ -188,7 +204,6 @@ UINT_TO_RECORD_TYPE = Dict(
     # 0x2703 => ElKey (unreleased in 6.0)
     # 0x0028 Link Type (unreleased in 6.0)
     # 0x0029 LinkKeys (unreleased in 6.0)
-
     0x2B02 => GDSPropertyAtrribute,
     0x2C06 => GDSPropertyValue,
     0x2D00 => GDSBeginBox,
@@ -208,3 +223,6 @@ UINT_TO_RECORD_TYPE = Dict(
 )
 
 # clean up? how to arrange types better?
+# writing the 
+
+RECORD_TYPE_TO_UINT = Dict((v=>k) for (k,v) in UINT_TO_RECORD_TYPE)

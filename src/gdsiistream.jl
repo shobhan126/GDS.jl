@@ -1,30 +1,143 @@
-import Base: read, UInt64, show
+import Base: read, UInt64, show, IOStream
 
+"""
+types encapsulating gds stream syntax  
+"""
 include("recordtypes.jl")
 # TODO: Extend the show function
 # Base.show(io:: IO, x::GDSFloat64)
 
 """
-Read the Excess-64 Binary Representation into Float64.
+1. Stream
+2. formattype
+3. Structure
+4. Elements
+5. Boundary
+6. Path
+7. SRef
+8. ARef
+9. text
+10. node
+11. box
+12. textbody
+13. strans
+14. property
 """
-function read(stream::IOStream, ::Type{GDSFloat64})
-    # currently blindly using the logic used in gdspy. 
-    # TODO: test, add reasoning, simplify; extend Base.read instead of naming this new function
-    byte_1 = read(stream, UInt8)
-    exponent_bits =  bitstring(byte_1 & 0x7F)
-    mantissa_bits = join(bitstring.(read(stream, 7)))
-    sign = (-1.0)^(byte_1 & 0x80) 
-    value = sign * parse(Int64, mantissa_bits, base=2)  * 16.0^(parse(Int64, exponent_bits, base=2)-64.0)/ 72057594037927936.0
-    GDSFloat64(reinterpret(UInt64, value))
+
+
+abstract type GDSElement end
+# GDS Elements Boundary, Path, SRef, ARef, Text, Node, Box
+
+
+struct GDSStream 
+    header
+    beginlib
+    libdirsize
+    srfname
+    libsecure
+    libname
+    reflibs
+    fonts
+    attributetable
+    generations
+    formattype
+    units
+    structures
+end
+
+struct GDSFormatType
+    format
+    masks
 end
 
 
-function read(stream::IOStream, ::Type{GDSRecordHeader})
-"""
-Read the IOStream assuming next few bits are the Record Header. 
-"""
-    num_bytes = ntoh(read(stream, UInt16))
-    record_type = ntoh(read(stream, UInt8))
-    data_type = UINT_TO_TYPE[read(stream, UInt8)]
-    return num_bytes, record_type, data_type
+struct GDSStructure
+    name::GDSAsciiString
+    elements::Vector{<:GDSElement}
+end
+
+struct GDSBoundary <: GDSElement
+    flags::Union{Nothing, GDSElementFlags}
+    plex::Union{Nothing, GDSPlex}
+    layer:: GDSLayer
+    datatype::GDSDataType
+    xy:: GDSXY
+end
+GDSBoundary(layer::GDSLayer, datatype::GDSDataType, xy::GDSXY) = GDSBoundary(nothing, nothing, layer, datatype, xy)
+
+struct GDSPath <: GDSElement
+    flags
+    plex
+    layer
+    datatype
+    pathtype
+    width
+    beginextn
+    endextn
+    xy:: GDSXY
+end
+
+
+struct GDSStructureReferenc <: GDSElement
+    flags
+    plex
+    name
+    strans
+    xy
+end
+
+
+struct GDSArrayReference <: GDSElement
+    flags
+    plex 
+    sname
+    strans
+    colrow
+    xy
+end
+
+struct GDSText <: GDSElement
+    flags
+    plex
+    layer
+    textbody
+end
+
+
+struct GDSNode <: GDSElement
+    flags
+    plex
+    layer
+    nodetype
+    xy
+end
+
+struct GDSBox <: GDSElement
+    flags
+    plex
+    layer
+    boxtype
+    xy
+end
+
+struct TextBody <: GDSElement
+    type
+    presentation
+    pathtype
+    width
+    strans
+    xy
+    gdsstring
+end
+
+struct GDStructureTransformation <: GDSElement
+    strans
+    magnitude
+    angle
+end
+
+
+struct GDSProperty <: GDSElement
+    attribute
+    value
 end
