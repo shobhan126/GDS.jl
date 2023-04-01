@@ -1,4 +1,5 @@
-include("recordtypes.jl")
+
+include("gdsiistream.jl")
 # stream.read(4) == read 4 bytes
 import Base: read, UInt64, show, IOStream
 # TODO: Extend the show function
@@ -6,23 +7,9 @@ import Base: read, UInt64, show, IOStream
 
 """
 http://bitsavers.informatik.uni-stuttgart.de/pdf/calma/GDS_II_Stream_Format_Manual_6.0_Feb87.pdf
-
 https://boolean.klaasholwerda.nl/interface/bnf/gdsformat.html#GDSBNF
 
 also see github repo for gdspy
-"""
-
-"""
-The Stream format output file is composed of variable length records. The
-minimum record length is four bytes. Records can be infinitely long. The
-first four bytes of a record are the header. The first two bytes of the header
-contain a count (in eight-bit bytes) of the total record length. The count
-tells you where one record ends and another begins. The next record begins
-immediately after the last byte included in the count.
-
-The third byte of the header is the record type. The fourth byte of the header
-describes the type of data contained within the record. The fifth through last
-bytes of a record are data. Figure 2-1 shows a typical record header. 
 """
 
 UINT_TO_TYPE = Dict(
@@ -32,7 +19,7 @@ UINT_TO_TYPE = Dict(
     0x02 => Int16,
     0x03 => Int32,
     # Acc. to the veryy old manual, Float32 is not used...
-    0x04 => Float32,
+    # 0x04 => Float32,
     0x05 => Float64,
     # ASCII String
     0x06 => String,
@@ -42,133 +29,118 @@ UINT_TO_TYPE = Dict(
 """
 Read the IOStream assuming next few bits are the Record Header. 
 """
-function read(stream::IOStream, ::Type{GDSRecordHeader})
-    num_bytes = ntoh(read(stream, UInt16))
-    record_type = UINT_TO_RECORD_TYPE[ntoh(read(stream, UInt16))]
-    GDSRecordHeader{record_type}(num_bytes-UInt16(4))
+function read(io::IOStream, ::Type{GDSRecordHeader})
+    nb = ntoh(read(io, UInt16))
+    rt = UINT_TO_RECORD_TYPE[ntoh(read(io, UInt16))]
+    return rt,(nb - UInt16(4))
 end
 
-# write gdsheader?
-
-"""
-Read the Excess-64 Binary Representation into Float64.
-"""
-function read(stream::IOStream, ::Type{GDSFloat64})
-    # currently blindly using the logic used in gdspy. 
-    # TODO: test, add reasoning, simplify; extend Base.read instead of naming this new function
-    byte_1 = read(stream, UInt8)
-    exponent_bits =  bitstring(byte_1 & 0x7F)
-    mantissa_bits = join(bitstring.(read(stream, 7)))
-    sign = (-1.0)^(byte_1 & 0x80) 
-    value = sign * parse(Int64, mantissa_bits, base=2)  * 16.0^(parse(Int64, exponent_bits, base=2)-64.0)/ 72057594037927936.0
-    GDSFloat64(reinterpret(UInt64, value))
-end
-
-
-"""
-Read a GDSRecord.
-"""
-function read(stream::IOStream, ::Type{GDSRecord})
-    header = read(stream, GDSRecordHeader)
-    record_type = typeof(header).parameters[1]
-    if supertype(record_type) == GDSAsciiString
-        data = read(stream, record_type, header.num_bytes)
-    elseif record_type == GDSXY
-        data = read(stream, record_type, header.num_bytes)
-    else
-        data = read(stream, record_type)
-    end
-    return header, data
-end
-
-read(stream::IOStream, t::Type{<:GDSEmptyRecord}) = nothing
+read(stream::IOStream, t::Type{<:GDSEmptyRecord}) = t
 read(stream::IOStream, t::Type{<:GDS16Bit}) = t(ntoh(read(stream, UInt16)))
 read(stream::IOStream, t::Type{<:GDS32Bit}) = t(ntoh(read(stream, UInt32)))
 read(stream::IOStream, t::Type{<:GDS64Bit}) = t(ntoh(read(stream, UInt64)))
 
-"""Read a GDSString subtype."""
-function read(stream::IOStream, t::Type{<:GDSAsciiString}, nbytes) 
-    chars = Char.([ntoh(read(stream, UInt8)) for _ in 1:nbytes])
-    t(join(chars))
-end
 
+read(stream::IOStream, t::Type{<:GDSAsciiString}, nbytes) = Char.([ntoh(read(stream, UInt8)) for _ in 1:nbytes]) |> join |> t
+read(stream::IOStream, t::Type{GDSXY}, nbytes::UInt16) = t([ntoh(read(stream, Int32)) for _ in 1:(nbytes/4)])
+read(stream::IOStream, t::Type{GDSUnits}) = t(read(stream, FloatE64), read(stream, FloatE64))
 
-function read(stream::IOStream, t::Type{GDSBeginLibrary})
-    t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
-end
+read(stream::IOStream, t::Type{GDSBeginLibrary}) = t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
+read(stream::IOStream, t::Type{GDSBeginStructure}) = t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
 
-function read(stream::IOStream, t::Type{GDSBeginStructure})
-    t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
-end
+GDSBeginElement = Union{GDSBeginBoundary,GDSBeginPath,GDSBeginStructureRef,GDSBeginArrayRef, GDSBeginNode, GDSBeginBox}
 
-function read(stream::IOStream, t::Type{GDSXY}, nbytes::UInt16)
-    GDSXY([ntoh(read(stream, Int32)) for _ in 1:(nbytes/4)])
-end
-
-read(stream::IOStream, t::Type{GDSUnits}) = t(read(stream, GDSFloat64), read(stream, GDSFloat64))
-
-
+TYPE_FROM_BEGIN_TYPE = Dict(
+    GDSBeginPath => GDSPath,
+    GDSBeginStructureRef => GDSStructureRef,
+    GDSBeginArrayRef => GDSArrayRef,
+    GDSBeginNode => GDSNode,
+    GDSBeginBox => GDSBox,
+    GDSBeginText => GDSText,
+    GDSEndElement => GDSEndElement,
+)
 
 """
-Read a Single Record from the stream.
+Read a GDSRecord
 """
-function read_record(stream::IOStream)
-    header = read(stream, GDSRecordHeader)
-    num_bytes = header.num_bytes
-    record_type = typeof(header).parameters[1]
-    data_type = UINT_TO_TYPE[UInt16(RECORD_TYPE_TO_UINT[record_type] & 0x00FF)]
-    if num_bytes > 0
-        if data_type != String
-            num_items = (num_bytes - 4) / sizeof(data_type)
-            data = [ntoh(read(stream, data_type)) for _ in 1:num_items]
-        else
-            num_items = (num_bytes - 4) / sizeof(UInt8)
-            chars = Char.([ntoh(read(stream, UInt8)) for _ in 1:num_items])
-            # TODO: 
-            #   fix float64 representation.
-            if chars[end] == '\0' 
-                pop!(chars);
-            end
-            data = join(chars)
-        end
+function read(io::IOStream, ::Type{GDSRecord})
+    t, nb = read(io, GDSRecordHeader)
+    if t <: GDSBeginElement
+        eltype = eval(join(split(string(t), "Begin")))
+        data = read(io, eltype)
     else
-        data = nothing
+        data = (t <: GDSAsciiString) | (t == GDSXY) ? read(io, t, nb) : read(io, t)
     end
-    return record_type, data
+    return data
 end
+
+# function read(io::IOStream, T::Type{<:GDSElement})
+#     k = string(typeof(T))[4:end]
+#     kwargs = Pair[]
+#     v = read(io, GDSRecord)
+#     while !(v isa GDSEndElement)
+#         v = read(io, GDSRecord)
+#         k = string(typeof(v))[4:end]
+#         push!(kwargs, k=>v)
+#     end
+#     # TODO Add GDSProperty? 
+#     T(kwargs...)
+# end
+
+# function read(io::IOStream, ::Type{GDSStructure})
+#     # read GDSBeginStructure
+#     bgnstr = read(io, GDSBeginLibrary)
+
+#     name = read(io, GDSRecord)
+#     if bgnstr isa GDSEndLibrary
+#         return nothing
+#     end
+#     # read the structure name
+#     sname = read(io, GDSRecord)
+# end
 
 
 """
 Read a GDS file into raw records. 
 Emulates gdspy behavior.
 """
-function read_raw_record(stream::IOStream)
-    # read rec  ord header
-    header = read(stream, GDSRecordHeader)
-    num_bytes = header.num_bytes
-    println(num_bytes)
-    record_type = typeof(header).parameters[1]
+function read_raw_record(io::IOStream, ::Type{GDSStream})
+    # read record header
+    rt, nb  = read(io, GDSRecordHeader)
     # data_type = UINT_TO_TYPE[UInt16(RECORD_TYPE_TO_UINT[record_type] & 0x00FF)]
-    if num_bytes > 0
-        return (record_type, [read(stream, UInt8) for _ in 1:num_bytes])
-    else
-        return (record_type, nothing)
-    end
+    nb > 0 ? (rt, [read(io, UInt8) for _ in 1:nb]) : (rt, nothing)
 end
-# function gdsii_hash(filename, engine=None)
-# end
 
 
-# stream = open("test_gds.GDS", "r+");
-# test = Any[read_raw_record(stream)[1]]
-# while bytesavailable(stream) > 0
-#     append!(test, [read_raw_record(stream)[1]])
-# end;
-# length(test)
+read_raw(io::IOStream, ::Type{GDSRecord}) = read(io, GDSRecord) |> x -> (type(x), x)
 
-# stream = open("test_gds.GDS", "r+");
-# test2 = Any[read(stream, GDSRecord)]
-# while bytesavailable(stream) > 0
-#     append!(test2, tuple(read(stream, GDSRecord)))
-# end;
-# length(test)
+"""
+Read the entire file and create a GDSStream 
+
+
+    <stream format>:: = 
+        HEADER BGNLIB [LIBDIRSIZE] [SRFNAME]
+        [LIBSECUR] LIBNAME [REFLIBS] [FONTS]
+        [ATTRTABLE] [GENERATIONS] [<FormatType>]
+        UNITS {<structure>}* ENDLIB
+"""
+function read(io::IOStream, ::Type{GDSStream})
+    # data before you get to strcutres
+    prestruct = Dict{Symbol, GDSRecord}()
+    rec = read(io, GDSRecord)
+    while !(rec isa GDSUnits)
+        prestruct[Symbol(typeof(rec))] = rec
+        rec = read(io, GDSRecord)
+    end
+    prestruct[:GDSUnits] = rec
+
+    remaining = Any[]
+    while bytesavailable(io) > 0
+        push!(remaining, read(io, GDSRecord))
+    end
+    return prestruct, remaining
+    # read a gds structure 
+end
+
+
+

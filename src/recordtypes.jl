@@ -1,26 +1,36 @@
 using Dates
 import Base: read, UInt16, UInt64, show
 
-primitive type  GDSFloat64 <: AbstractFloat 64 end 
+include("float.jl")
 
-GDSFloat64(x::UInt64) = reinterpret(GDSFloat64, x)
-UInt64(x::GDSFloat64) = reinterpret(UInt64, x)
+"""
+Read the Excess-64 Binary Representation into Float64.
+"""
+function read(stream::IOStream, ::Type{FloatE64})
+    # currently blindly using the logic used in gdspy. 
+    # TODO: test, add reasoning, simplify; extend Base.read instead of naming this new function
+    byte_1 = read(stream, UInt8)
+    exponent_bits = bitstring(byte_1 & 0x7F)
+    mantissa_bits = join(bitstring.(read(stream, 7)))
+    sign = (-1.0)^(byte_1 & 0x80)
+    value = sign * parse(Int64, mantissa_bits, base=2) * 16.0^(parse(Int64, exponent_bits, base=2) - 64.0) / 72057594037927936.0
+    FloatE64(reinterpret(UInt64, value))
+end
 
 
 abstract type GDSRecord end
-abstract type GDSEmptyRecord <:GDSRecord end
-abstract type GDS16Bit <:GDSRecord end
-abstract type GDS32Bit <:GDSRecord end
-abstract type GDS64Bit <:GDSRecord end
-abstract type GDSAsciiString <:GDSRecord end
+abstract type GDSEmptyRecord <: GDSRecord end
+abstract type GDS16Bit <: GDSRecord end
+abstract type GDS32Bit <: GDSRecord end
+abstract type GDS64Bit <: GDSRecord end
+abstract type GDSAsciiString <: GDSRecord end
 
 """
 Record Header describing the data bytes.
 """
-struct GDSRecordHeader{T} <: GDSRecord where T<: GDSRecord
-    num_bytes:: UInt16
+struct GDSRecordHeader{T} <: GDSRecord where {T<:GDSRecord}
+    num_bytes::UInt16
 end
-
 
 macro emptyrecordtype(args)
     for arg in args.args
@@ -50,31 +60,33 @@ macro eightbyterealtype(args)
         @eval primitive type $(arg) <: GDS64Bit 64 end
         @eval $(arg)(x::UInt64) = reinterpret($(arg), x)
         @eval $(arg)(x::Integer) = reinterpret($(arg), UInt64(x))
-        @eval $(arg)(x::GDSFloat64) = reinterpret($(arg), x)
-        @eval $(arg)(x::GDSFloat64) = reinterpret($(arg), GDSFloat64(x))
+        @eval $(arg)(x::FloatE64) = reinterpret($(arg), x)
+        @eval $(arg)(x::FloatE64) = reinterpret($(arg), FloatE64(x))
     end
 end
 
 
 macro stringtype(args)
     for arg in args.args
-        @eval struct $(arg) <: GDSAsciiString value::String end
+        @eval struct $(arg) <: GDSAsciiString
+            value::String
+        end
     end
 end
 
 
 @emptyrecordtype (
-    GDSEndLibrary, 
-    GDSEndStructure, 
+    GDSEndLibrary,
+    GDSEndStructure,
     GDSBeginBoundary,
     GDSBeginPath,
     GDSBeginStructureRef,
-    GDSBeginArrayRef, 
+    GDSBeginArrayRef,
+    GDSBeginNode,
+    GDSBeginBox,
     GDSBeginText,
     GDSEndElement,
     # GDSTextNode, # Not being used?
-    GDSBeginNode,
-    GDSBeginBox,
     GDSEndMasks,
 )
 
@@ -91,7 +103,7 @@ end
     GDSElementFlags,
     GDSLinkType,
     GDSNodeType,
-    GDSPropertyAtrribute,
+    GDSPropertyAttribute,
     GDSBoxType,
     GDSTapeNumber,
     GDSTapeCode,
@@ -110,55 +122,54 @@ end
 # constructor with DateTime objects
 # function that casts it into datetime
 # show(io: IO)
-    # last_modified::DateTime
-    # last_accessed::DateTime
+# last_modified::DateTime
+# last_accessed::DateTime
 
 @stringtype (
-    GDSLibraryName, 
+    GDSLibraryName,
     GDSStructureName,
     GDSRefStructureName,
     GDSString,
-    GDSAttributeTable, 
-    GDSStypTable, 
-    GDSPropertyValue, 
-    GDSMask, 
+    GDSAttributeTable,
+    GDSStypTable,
+    GDSPropertyValue,
+    GDSMask,
     GDSSRFName
 )
 
 # add assertions for ascii string?
-struct GDSBeginLibrary <:GDSRecord
-    value::NTuple{12, Int16}
+struct GDSBeginLibrary <: GDSRecord
+    value::NTuple{12,Int16}
 end
 
-struct GDSBeginStructure <:GDSRecord
-    value::NTuple{12, Int16}
+struct GDSBeginStructure <: GDSRecord
+    value::NTuple{12,Int16}
 end
 
 # composite type with gds floats?
-struct GDSUnits <:GDSRecord
-    scale_to_user_units::GDSFloat64
-    database_units_in_meters::GDSFloat64
+struct GDSUnits <: GDSRecord
+    scale_to_user_units::FloatE64
+    database_units_in_meters::FloatE64
 end
 
 primitive type GDSWidth <: GDSRecord 32 end
 
-struct GDSXY <:GDSRecord
+struct GDSXY <: GDSRecord
     value::Vector{Int32}
 end
 
 
 struct GDSColRow <: GDSRecord
-    value::Tuple{UInt16, UInt16}
+    value::Tuple{UInt16,UInt16}
 end
 
 struct GDSReferenceLibraries <: GDSRecord
-    value::Vector{String}
+    value::Vector{<:String}
 end
 
 struct GDSFontNames <: GDSRecord
-    value::Vector{String}
+    value::Vector{<:String}
 end
-
 
 primitive type GDSPlex <: GDSRecord 32 end
 primitive type GDSBeginExtn <: GDSRecord 32 end
@@ -175,7 +186,7 @@ UINT_TO_RECORD_TYPE = Dict(
     0x0606 => GDSStructureName,
     0x0700 => GDSEndStructure,
     0x0800 => GDSBeginBoundary,
-    0x0900 => GDSBeginPath, 
+    0x0900 => GDSBeginPath,
     0x0A00 => GDSBeginStructureRef,
     0x0B00 => GDSBeginArrayRef,
     0x0C00 => GDSBeginText,
@@ -188,7 +199,7 @@ UINT_TO_RECORD_TYPE = Dict(
     0x1302 => GDSColRow,
     # 0x1400 => GDSTextNode,
     0x1602 => GDSTextType,
-    0x1701 => GDSPresentation, 
+    0x1701 => GDSPresentation,
     0x1906 => GDSString,
     0x1A01 => GDSStructureTransform,
     0x1B05 => GDSMag,
@@ -204,7 +215,7 @@ UINT_TO_RECORD_TYPE = Dict(
     # 0x2703 => ElKey (unreleased in 6.0)
     # 0x0028 Link Type (unreleased in 6.0)
     # 0x0029 LinkKeys (unreleased in 6.0)
-    0x2B02 => GDSPropertyAtrribute,
+    0x2B02 => GDSPropertyAttribute,
     0x2C06 => GDSPropertyValue,
     0x2D00 => GDSBeginBox,
     0x2E02 => GDSBoxType,
@@ -223,6 +234,5 @@ UINT_TO_RECORD_TYPE = Dict(
 )
 
 # clean up? how to arrange types better?
-# writing the 
-
-RECORD_TYPE_TO_UINT = Dict((v=>k) for (k,v) in UINT_TO_RECORD_TYPE)
+# Use enum here
+RECORD_TYPE_TO_UINT = Dict((v => k) for (k, v) in UINT_TO_RECORD_TYPE)
