@@ -8,6 +8,7 @@ while bytesavailable(stream) > 0
     append!(test, [read_raw_record(stream, GDSStream)[1]])
 end;
 
+# GDSBoundary(; elementflags=nothing, plex=nothing, layer, datatype, xy) = GDSBoundary(elementflags, plex, layer, datatype, xy)
 stream = open("test_gds.GDS", "r+");
 test2 = Any[read(stream, GDSRecord)]
 while bytesavailable(stream) > 0

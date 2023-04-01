@@ -32,14 +32,13 @@ Read the IOStream assuming next few bits are the Record Header.
 function read(io::IOStream, ::Type{GDSRecordHeader})
     nb = ntoh(read(io, UInt16))
     rt = UINT_TO_RECORD_TYPE[ntoh(read(io, UInt16))]
-    return rt,(nb - UInt16(4))
+    return rt, (nb - UInt16(4))
 end
 
 read(stream::IOStream, t::Type{<:GDSEmptyRecord}) = t
 read(stream::IOStream, t::Type{<:GDS16Bit}) = t(ntoh(read(stream, UInt16)))
 read(stream::IOStream, t::Type{<:GDS32Bit}) = t(ntoh(read(stream, UInt32)))
 read(stream::IOStream, t::Type{<:GDS64Bit}) = t(ntoh(read(stream, UInt64)))
-
 
 read(stream::IOStream, t::Type{<:GDSAsciiString}, nbytes) = Char.([ntoh(read(stream, UInt8)) for _ in 1:nbytes]) |> join |> t
 read(stream::IOStream, t::Type{GDSXY}, nbytes::UInt16) = t([ntoh(read(stream, Int32)) for _ in 1:(nbytes/4)])
@@ -48,32 +47,81 @@ read(stream::IOStream, t::Type{GDSUnits}) = t(read(stream, FloatE64), read(strea
 read(stream::IOStream, t::Type{GDSBeginLibrary}) = t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
 read(stream::IOStream, t::Type{GDSBeginStructure}) = t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
 
-GDSBeginElement = Union{GDSBeginBoundary,GDSBeginPath,GDSBeginStructureRef,GDSBeginArrayRef, GDSBeginNode, GDSBeginBox}
+GDSBeginElement = Union{GDSBeginBoundary,GDSBeginPath,GDSBeginStructureRef,GDSBeginArrayRef,GDSBeginNode,GDSBeginBox, GDSBeginText}
 
-TYPE_FROM_BEGIN_TYPE = Dict(
+TYPE_FROM_BEGIN = Dict(
+    GDSBeginBoundary => GDSBoundary,
     GDSBeginPath => GDSPath,
-    GDSBeginStructureRef => GDSStructureRef,
-    GDSBeginArrayRef => GDSArrayRef,
+    GDSBeginStructureRef => GDSStructureReference,
+    GDSBeginArrayRef => GDSArrayReference,
     GDSBeginNode => GDSNode,
     GDSBeginBox => GDSBox,
     GDSBeginText => GDSText,
-    GDSEndElement => GDSEndElement,
+)
+
+SUBSTRUCTURE_DICT = Dict(
+    GDSStructureReference => GDSStructureTransformation,
+    GDSArrayReference => GDSStructureTransformation,
+    GDSText => GDSTextBody,
 )
 
 """
-Read a GDSRecord
+Read an individual record element GDSRecord. Here we can dispatch based 
+whether we're reading a primitive or a gds stream as wel. 
 """
 function read(io::IOStream, ::Type{GDSRecord})
     t, nb = read(io, GDSRecordHeader)
     if t <: GDSBeginElement
-        eltype = eval(join(split(string(t), "Begin")))
-        data = read(io, eltype)
+        data = read(io, TYPE_FROM_BEGIN[t])
+    elseif t <: GDSBeginElement
+        data = read(io, GDSStructure, t)
     else
         data = (t <: GDSAsciiString) | (t == GDSXY) ? read(io, t, nb) : read(io, t)
     end
-    return data
+    return t isa GDSEmptyRecord ? t :  data
 end
 
+
+## Reading the stream sub_elements: FormatType, TextBody, GDSStructureTranformation, GDSProperty
+function read(io::IOStream, T::Type{<:GDSElement})
+    kwargs = Dict{Symbol, Any}()
+    while true
+        el = read(io, GDSRecord)
+        el == GDSEndElement ? break : setindex!(kwargs, el, Symbol(lowercase(string(typeof(el)))[4:end]))
+    end
+    # here match the el to the fieldnames of 
+    kwargsT = Dict{Symbol, Any}()
+    for k in keys(kwargs)
+        if (k in fieldnames(T))
+            setindex!(kwargsT, pop!(kwargs,k), k)
+        end
+    end
+    # handling struct within a struct case for SRef, ARef, & Text
+    if T in keys(SUBSTRUCTURE_DICT)
+        V = SUBSTRUCTURE_DICT[T]
+        v = lowercase(string(V))[4:end] |> Symbol
+        setindex!(kwargsT, V(;kwargs...), v)
+    end
+
+    # TODO: reading the <property> structs!! 
+    return T(;kwargsT...)
+end
+
+function read(io::IOStream, ::Type{GDSStructure}, b::GDSBeginStructure)
+    # read the structure name
+    # TODO: extract time from the GDSBeginStrcture object and pass it to a 
+    # new field in the GDSStructure object
+    sname = read(io, GDSRecord)
+    els = GDSElement[]
+    while true
+        el = read(io, GDSRecord)
+        el == GDSEndStructure ? break : push!(els, el)
+    end
+    GDSStructure(sname, els)
+end
+
+# Resolution for 
+# reading a function?? 
 # function read(io::IOStream, T::Type{<:GDSElement})
 #     k = string(typeof(T))[4:end]
 #     kwargs = Pair[]
@@ -87,26 +135,13 @@ end
 #     T(kwargs...)
 # end
 
-# function read(io::IOStream, ::Type{GDSStructure})
-#     # read GDSBeginStructure
-#     bgnstr = read(io, GDSBeginLibrary)
-
-#     name = read(io, GDSRecord)
-#     if bgnstr isa GDSEndLibrary
-#         return nothing
-#     end
-#     # read the structure name
-#     sname = read(io, GDSRecord)
-# end
-
-
 """
 Read a GDS file into raw records. 
 Emulates gdspy behavior.
 """
 function read_raw_record(io::IOStream, ::Type{GDSStream})
     # read record header
-    rt, nb  = read(io, GDSRecordHeader)
+    rt, nb = read(io, GDSRecordHeader)
     # data_type = UINT_TO_TYPE[UInt16(RECORD_TYPE_TO_UINT[record_type] & 0x00FF)]
     nb > 0 ? (rt, [read(io, UInt8) for _ in 1:nb]) : (rt, nothing)
 end
@@ -126,7 +161,7 @@ Read the entire file and create a GDSStream
 """
 function read(io::IOStream, ::Type{GDSStream})
     # data before you get to strcutres
-    prestruct = Dict{Symbol, GDSRecord}()
+    prestruct = Dict{Symbol,GDSRecord}()
     rec = read(io, GDSRecord)
     while !(rec isa GDSUnits)
         prestruct[Symbol(typeof(rec))] = rec

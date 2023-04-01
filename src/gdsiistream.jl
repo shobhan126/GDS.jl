@@ -22,7 +22,7 @@ include("recordtypes.jl")
 9. text
 10. node
 11. box
-12. textbody
+12. textbody -> start on TextBody, end on GDSString
 13. strans 
 14. property
 
@@ -33,6 +33,7 @@ SREF => CellReference
 abstract type GDSElement end
 # # GDS Elements Boundary, Path, SRef, ARef, Node, Box
 # text will be a separate type?
+
 _sub_elements = [
     :GDSFormatType => (GDSFormat, [GDSMask]),
     :GDSTextBody => (GDSDataType, [GDSPresentation], [GDSPathType], [GDSWidth], [GDSStructureTransform], GDSXY, GDSString),
@@ -64,12 +65,12 @@ for (k, v) in _sub_elements
     @eval $constructor_declaration
 end
 
-
+refstructurename=
 _gds_elements = Dict([
     :GDSBoundary => ([GDSElementFlags], [GDSPlex], GDSLayer, GDSDataType, GDSXY),
     :GDSPath => ([GDSElementFlags], [GDSPlex], GDSLayer, GDSDataType, [GDSPathType], [GDSWidth], [GDSBeginExtn], [GDSEndExtn], GDSXY),
-    :GDSStructureReference => ([GDSElementFlags], [GDSPlex], GDSStructureName, [GDSStructureTransformation], GDSXY),
-    :GDSArrayReference => ([GDSElementFlags], [GDSPlex], GDSStructureName, [GDSStructureTransformation], GDSColRow, GDSXY),
+    :GDSStructureReference => ([GDSElementFlags], [GDSPlex], GDSRefStructureName, [GDSStructureTransformation], GDSXY),
+    :GDSArrayReference => ([GDSElementFlags], [GDSPlex], GDSRefStructureName, [GDSStructureTransformation], GDSColRow, GDSXY),
     :GDSNode => ([GDSElementFlags], [GDSPlex], GDSLayer, GDSDataType, GDSXY),
     :GDSBox => ([GDSElementFlags], [GDSPlex], GDSLayer, GDSDataType, GDSXY),
     :GDSText => ([GDSElementFlags], [GDSPlex], GDSLayer, GDSTextBody),
@@ -94,27 +95,10 @@ for (k, v) in _gds_elements
     @eval $constructor_declaration
 end
 
-_stream_elements = [
-    :GDSStructure => (GDSStructureName, [GDSElement]),
-]
 
-
-for (k, v) in _stream_elements
-    pnames = _tosym.(v)
-    ptypes = _totypes.(v)
-    props = [:($n::$t) for (n, t) in zip(pnames, ptypes)]
-    struct_declaration = Expr(
-        :struct,
-        false, # ismutable or not
-        Expr(:<:, k, :GDSRecord), Expr(:block, props...))
-    @eval $struct_declaration
-
-    constructor_declaration = Expr(
-        :(=),
-        Expr(:call, k, Expr(:parameters, _toparam.(v)...)),
-        Expr(:call, k, pnames...)
-    )
-    @eval $constructor_declaration
+struct GDSStructure
+    name::GDSStructureName
+    elements::Vector{<:GDSElement}
 end
 
 struct GDSStream
