@@ -15,7 +15,7 @@ while bytesavailable(stream) > 0
     push!(test2, read(stream, GDSRecord))
 end;
 
-test2[1:20]
+
 a = [(t isa DataType ? t : typeof(t)) for t in test2]
 length(test)
 

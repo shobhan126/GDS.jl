@@ -97,6 +97,7 @@ end
 
 
 struct GDSStructure
+    # beginstr::GDSBeginStructure
     name::GDSStructureName
     elements::Vector{<:GDSElement}
 end

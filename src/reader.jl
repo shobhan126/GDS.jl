@@ -47,7 +47,7 @@ read(stream::IOStream, t::Type{GDSUnits}) = t(read(stream, FloatE64), read(strea
 read(stream::IOStream, t::Type{GDSBeginLibrary}) = t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
 read(stream::IOStream, t::Type{GDSBeginStructure}) = t(tuple((ntoh(read(stream, Int16)) for _ in 1:12)...))
 
-GDSBeginElement = Union{GDSBeginBoundary,GDSBeginPath,GDSBeginStructureRef,GDSBeginArrayRef,GDSBeginNode,GDSBeginBox, GDSBeginText}
+GDSBeginElement = Union{GDSBeginBoundary,GDSBeginPath,GDSBeginStructureRef,GDSBeginArrayRef,GDSBeginNode,GDSBeginBox,GDSBeginText}
 
 TYPE_FROM_BEGIN = Dict(
     GDSBeginBoundary => GDSBoundary,
@@ -73,44 +73,46 @@ function read(io::IOStream, ::Type{GDSRecord})
     t, nb = read(io, GDSRecordHeader)
     if t <: GDSBeginElement
         data = read(io, TYPE_FROM_BEGIN[t])
-    elseif t <: GDSBeginElement
-        data = read(io, GDSStructure, t)
+    elseif t <: GDSBeginStructure
+        beginstr = read(io, t)
+        data = read(io, GDSStructure)
     else
         data = (t <: GDSAsciiString) | (t == GDSXY) ? read(io, t, nb) : read(io, t)
     end
-    return t isa GDSEmptyRecord ? t :  data
+    return t isa GDSEmptyRecord ? t : data
 end
 
 
 ## Reading the stream sub_elements: FormatType, TextBody, GDSStructureTranformation, GDSProperty
 function read(io::IOStream, T::Type{<:GDSElement})
-    kwargs = Dict{Symbol, Any}()
+    kwargs = Dict{Symbol,Any}()
     while true
         el = read(io, GDSRecord)
         el == GDSEndElement ? break : setindex!(kwargs, el, Symbol(lowercase(string(typeof(el)))[4:end]))
     end
     # here match the el to the fieldnames of 
-    kwargsT = Dict{Symbol, Any}()
+    kwargsT = Dict{Symbol,Any}()
     for k in keys(kwargs)
         if (k in fieldnames(T))
-            setindex!(kwargsT, pop!(kwargs,k), k)
+            setindex!(kwargsT, pop!(kwargs, k), k)
         end
     end
     # handling struct within a struct case for SRef, ARef, & Text
     if T in keys(SUBSTRUCTURE_DICT)
         V = SUBSTRUCTURE_DICT[T]
         v = lowercase(string(V))[4:end] |> Symbol
-        setindex!(kwargsT, V(;kwargs...), v)
+        setindex!(kwargsT, V(; kwargs...), v)
     end
 
     # TODO: reading the <property> structs!! 
-    return T(;kwargsT...)
+    return T(; kwargsT...)
 end
 
-function read(io::IOStream, ::Type{GDSStructure}, b::GDSBeginStructure)
+function read(io::IOStream, ::Type{GDSStructure})
     # read the structure name
     # TODO: extract time from the GDSBeginStrcture object and pass it to a 
     # new field in the GDSStructure object
+    _ = read(io, GDSBeginStructure)
     sname = read(io, GDSRecord)
     els = GDSElement[]
     while true
